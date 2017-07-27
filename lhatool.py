@@ -29,13 +29,20 @@ class LHA(object):
         if not blk:
             raise Exception('Block not found: %s' % name)
         return blk
+    
+    def get_decay(self, pid):
+        dec = self.decays[pid]
+        if not dec:
+            raise Exception('Decay not found: PDG %d' % pid)
+        return dec
         
     
     def add_block(self, block):
         self.blocks[block.title] = block
     
     def add_decay(self, decay):
-        self.decays[decay.title] = decay
+        self.decays[decay.pdgid] = decay
+    
     
     def linetype(self, line):
         
@@ -55,8 +62,9 @@ class LHA(object):
         
     def entrytype(self, string):
         
-        type_regexes = {'INT': r'(?:[\+\-])?\d+(?!\.)',
+        type_regexes = {'INT': r'^([+\-]?\d+)(?![\d^\D])',
                         'FLOAT': r'(?:[\+\-])?\d+\.\d+(?:[eEdD][\+\-]\d+)?(?!\.)',
+                        'STRING': r'([a-zA-Z]\S*)',
                         'COMMENT' : r'(?:\#.*)'}
         
         thistype = 'UNKNOWN'
@@ -112,9 +120,14 @@ class LHA(object):
                 for element in splitline:
                     etype = self.entrytype(element)
                     if etype == 'FLOAT':
-                        vals.append(float(element))
+                        try:
+                            vals.append(float(element))
+                        except ValueError:
+                            vals.append(str(element))
                     elif etype == 'INT':
                         vals.append(int(element))
+                    elif etype == 'STRING' or etype == 'VERSION':
+                        vals.append(str(element))
                     elif etype == 'COMMENT':
                         # Merge all remainders of line, and stop
                         comm = line[line.find('#'):]
@@ -134,7 +147,7 @@ class LHA(object):
                 
                 params = re.search(r'((?:[\+\-])?\d+(?!\.))\s*([+\-]?\d?\.?\d*[Ee][+\-]?\d+)', line)
                 if params:
-                    pid = params.group(1)
+                    pid = int(params.group(1))
                     pwidth = params.group(2)
                 else:
                     raise Exception('Invalid DECAY block at line %d' % i)
@@ -191,7 +204,7 @@ class LHA(object):
     
 class Block(object):
     """docstring for Block."""
-    def __init__(self, title, comment):
+    def __init__(self, title, comment=None):
         super(Block, self).__init__()
         
         self.title = title
@@ -200,7 +213,10 @@ class Block(object):
     
     def __str__(self):
         """ Stringification """
-        return 'BLOCK\t{0}\t# {1}'.format(self.title, self.comment)
+        s = 'BLOCK\t{}'.format(self.title)
+        if self.comment is not None:
+            s += '\t# {}'.format(self.comment)
+        return s
     
     def add(self, entry):
         self.entries.append(entry)
@@ -208,7 +224,6 @@ class Block(object):
         
     def get_entry_by_key(self, key):
         for entry in self.entries:
-            print 'lolo', entry
             if key in entry.lookup:
                 return entry.lookup[key]
         raise Exception('No entry with key %s' % key)
@@ -226,6 +241,9 @@ class Entry(object):
         super(Entry, self).__init__()
         
         # Values = None -> comment only
+        if values is not None:
+            if not isinstance(values, list):
+                values = list(values)
         
         self.values = values if values is not None else list()
         self.comment = comment
@@ -237,7 +255,7 @@ class Entry(object):
             self.lookup[self.values[0]] = self.values[1]
             
             if DEBUG:
-                print 'Created key-value pair (%d, %f)' % (self.values[0], self.values[1])
+                print 'Created key-value pair ({}, {}})'.format(self.values[0], self.values[1])
             
         
         
@@ -249,8 +267,10 @@ class Entry(object):
         for v in self.values:
             if type(v) == int:
                 s += '\t{:d}'.format(v)
-            else:
+            elif type(v) == float:
                 s += '\t{:.8e}'.format(v)
+            else:
+                s += '\t{}'.format(v)
         
         if self.comment is not None:
             if s:
@@ -275,6 +295,15 @@ class Decay(object):
         self.comment = comment
         self.entries = []
     
+    
+    def get_branching_ratio(self, id1, id2):
+        for entry in self.entries:
+            if len(entry.values) >= 4:
+                if entry.values[2] == int(id1) and entry.values[3] == int(id2):
+                    return entry.values[0] 
+        
+        raise Exception('No BR for pids {}, {}'.format(id1, id2))
+    
     def __str__(self):
         """ Stringification """
         s = 'DECAY\t{:d}\t{:.8e}\t# {}'.format(self.pdgid, self.width, self.comment)
@@ -282,7 +311,9 @@ class Decay(object):
             s += '\t{}'.format(self.comment.replace('\n', ''))
         
         return s
-
+    
+    def __repr__(self):
+        return self.__str__()
 
 
 
@@ -295,6 +326,9 @@ if __name__ == '__main__':
     # Get value
     mA = lha.get_block('MASS').get_entry_by_key(36)
     print 'mA =', mA
+    
+    wA = lha.get_decay(36).width
+    print 'wA =', wA
     
     # Modify existing value
     # TODO
